@@ -1,19 +1,28 @@
 metadata {
   definition (name: "Aeon Water Sensor 6", namespace: "robertvandervoort", author: "Robert Vandervoort", ocfDeviceType: "x.com.st.d.sensor.moisture") {
     capability "Battery"
+    capability "Power Source"
     capability "Configuration"
     capability "Notification"
     capability "Sensor"
     capability "Switch"
-    capability "Tamper Alert"
+    capability "Shock Sensor"
     capability "Temperature Measurement"
     capability "Water Sensor"
     capability "Zw Multichannel"
     
-	  command "configure"
+	attribute "switch1", "enum", ["on", "off"]
+	attribute "switch2", "enum", ["on", "off"]
+    
+	command "configure"
     command "getTemp"
     command "getPosition"
-
+    command "getBattery"
+    command "clearShock"
+/*
+type:0701 mfr:0086 prod:0102 model:007A
+cc:5E,86,84,98,72,5A sec:85,59,80,70,7A,71,73,31,60,8E
+*/
     fingerprint mfr: "0086", prod: "0102", model: "007A"
   }
 
@@ -21,13 +30,20 @@ metadata {
     status "dry": "command: 3003, payload: 00"
     status "wet": "command: 3003, payload: FF"
   }
-
+  
   tiles (scale: 2){
-    standardTile("water", "device.water", width: 3, height: 3) {
-      state "dry", icon:"st.alarm.water.dry", backgroundColor:"#ffffff"
-      state "wet", icon:"st.alarm.water.wet", backgroundColor:"#00A0DC"
+    multiAttributeTile(name:"water", type: "generic", width: 6, height: 4, canChangeIcon: true){
+      tileAttribute("device.water", key: "PRIMARY_CONTROL") {
+        attributeState("dry", icon:"st.alarm.water.dry", backgroundColor:"#ffffff")
+        attributeState("wet", icon:"st.alarm.water.wet", backgroundColor:"#00A0DC")
+      }
+      tileAttribute("device.probe", key: "SECONDARY_CONTROL") {
+          attributeState("1", label: "probe 1", icon: "st.switches.switch.on", backgroundColor: "#79b821")
+	      attributeState("2", label: "probe 2", icon: "st.switches.switch.off", backgroundColor: "#ffffff")
+          attributeState("dry", label: "dry")
+	  }
     }
-    valueTile("temperature","device.temperature", width: 3, height: 3) {
+	valueTile("temperature","device.temperature", width: 2, height: 2) {
       state "temperature",label:'${currentValue}', action:"getTemp", precision:2, backgroundColors:[
           [value: 32, color: "#153591"],
           [value: 44, color: "#1e9cbb"],
@@ -38,22 +54,24 @@ metadata {
           [value: 98, color: "#bc2323"]
       ]
     }
+    valueTile("powerSource","device.powerSource", decoration: "flat", width: 3, height: 2) {
+      state "powerSource", label:'${currentValue} powered'
+    }    
     valueTile("battery", "device.battery", width: 3, height: 2, decoration: "flat") {
-      state "battery", label:'${currentValue}% battery', unit:""
+      state "battery", label:'${currentValue}% battery', unit:"", action: "getBattery"
     }
-    
+    valueTile("position","device.position", decoration: "flat", width: 4, height: 2) {
+      state "position", label:'Mounted ${currentValue}', action: "getPosition"
+    }
+    standardTile("shockSensor","device.shockSensor", decoration: "flat", width: 2, height: 2) {
+	  state("clear", label:'clear', icon:"st.contact.contact.closed", backgroundColor:"#cccccc")
+      state("detected", label:'shock', action: "clearShock", icon:"st.contact.contact.open", backgroundColor:"#e86d13")
+    }	
     standardTile("configure","device.configure", decoration: "flat", width: 3, height: 2) {
       state "configure", label:'config', action:"configure", icon:"st.secondary.tools"
     }
-    valueTile("position","device.position", decoration: "flat", width: 3, height: 2) {
-      state "position", label:'Mounted ${currentValue}', action:"getPosition"
-    }
-    valueTile("power","device.power", decoration: "flat", width: 3, height: 2) {
-      state "power", label:'Running on ${currentValue} power'
-    }
-
-    main "water"
-    details(["water", "temperature",  "power","battery","position","configure"])
+    main (["water"])
+    details(["water","temperature","position","powerSource","battery","shockSensor","configure"])
   }
   preferences {
     input "debugOutput", "boolean",
@@ -115,56 +133,63 @@ def zwaveEvent(physicalgraph.zwave.commands.configurationv1.ConfigurationReport 
   log.debug("ConfigurationReportv1 ${cmd.inspect()}")
 }
 
-def zwaveEvent(physicalgraph.zwave.commands.configurationv2.ConfigurationReport cmd) {
-  log.debug("ConfigurationReportv2 ${cmd.inspect()}")
-  def result = [];
+def zwaveEvent(physicalgraph.zwave.commands.configurationv2.ConfigurationReport cmd) {  
+  def event = [];
+  
   switch (cmd.parameterNumber) {
   	case 9:
-  		if (cmd.scaledConfigurationValue == 2) {
-    		if (state.debug) log.debug "${device.displayName} is connected to power via USB.";
-            result << createEvent(name: "power", value: "USB", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is connected to power via USB.");
-    	} else {
-	    	if (state.debug) log.debug "${device.displayName} is running on battery power."
-            result << createEvent(name: "power", value: "battery", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is running on battery power.");
-	    }
-        break;
+  	  if (cmd.scaledConfigurationValue == 2) {
+        event << createEvent(name: "powerSource", value: "DC", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is connected to power via USB.");
+      } else {
+        event << createEvent(name: "powerSource", value: "battery", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is running on battery power.");
+      }
+	  break;
 	case 84:
-   		if (cmd.scaledConfigurationValue == 0) {
-    		if (state.debug) log.debug "${device.displayName} is mounted horizontally."
-            result << createEvent(name: "position", value: "horizontal", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is mounted horizontally.");
-    	} else if (cmd.scaledConfigurationValue == 1) {
-           	if (state.debug) log.debug "${device.displayName} is mounted vertically."
-            result << createEvent(name: "position", value: "vertical", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is mounted vertically.");
-	    }
-        break;
+   	  if (cmd.scaledConfigurationValue == 0) {
+        event << createEvent(name: "position", value: "horizontal", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is mounted horizontally.");
+      } else if (cmd.scaledConfigurationValue == 1) {
+        event << createEvent(name: "position", value: "vertical", displayed: true, isStateChange: true, descriptionText: "${device.displayName} is mounted vertically.");
+	  }
+      break;
+	case 136:
+      if (cmd.scaledConfigurationValue == 1) {
+        event << createEvent(name: "probe", value: "1", displayed: true, isStateChange: true, descriptionText: "${device.displayName} detected water on probe 1.");
+      } else if (cmd.scaledConfigurationValue == 2) {
+        event << createEvent(name: "probe", value: "2", displayed: true, isStateChange: true, descriptionText: "${device.displayName} detected water on probe 2.");
+	  }
+      break;
+    default:
+      if (state.debug) log.debug log.debug("ConfigurationReportv2 ${cmd.inspect()}");
+      break;
   }
-  if (result) return result;
+  return event;
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.powerlevelv1.PowerlevelTestNodeReport cmd) {
-  log.debug "===Power level test node report received=== \r\n ${device.displayName}: statusOfOperation: ${cmd.statusOfOperation} testFrameCount: ${cmd.testFrameCount} testNodeid: ${cmd.testNodeid}"
-  def request = [
-    zwave.commands.powerlevelv1.PowerlevelGet()
-  ]
-  commands(request)
+  if(state.debug) log.debug "===Power level test node report received=== \r\n ${device.displayName}: statusOfOperation: ${cmd.statusOfOperation} testFrameCount: ${cmd.testFrameCount} testNodeid: ${cmd.testNodeid}"
+  def result = []
+  result << response(zwave.commands.powerlevelv1.PowerlevelGet())
+  return result
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.versionv1.VersionReport cmd) {
   def fw = "${cmd.applicationVersion}.${cmd.applicationSubVersion}"
   updateDataValue("fw", fw)
-  log.debug "---VERSION REPORT V1--- ${device.displayName} is running firmware version: $fw, Z-Wave version: ${cmd.zWaveProtocolVersion}.${cmd.zWaveProtocolSubVersion}"
+  if(state.debug) log.debug "---VERSION REPORT V1--- ${device.displayName} is running firmware version: $fw, Z-Wave version: ${cmd.zWaveProtocolVersion}.${cmd.zWaveProtocolSubVersion}"
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.firmwareupdatemdv2.FirmwareMdReport cmd) {
-  log.debug "---FIRMWARE MD REPORT V1--- \r\n ${device.displayName} reports \r\n checksum:  ${cmd.checksum} \r\n firmwareId:  ${cmd.firmwareId} \r\n manufacturerId:  ${cmd.manufacturerId}"
+  if(state.debug) log.debug "---FIRMWARE MD REPORT V1--- \r\n ${device.displayName} reports \r\n checksum:  ${cmd.checksum} \r\n firmwareId:  ${cmd.firmwareId} \r\n manufacturerId:  ${cmd.manufacturerId}"
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.manufacturerspecificv2.ManufacturerSpecificReport cmd) {
   def result = []
-  log.debug "manufacturerId:   ${cmd.manufacturerId}"
-  log.debug "manufacturerName: ${cmd.manufacturerName}"
-  log.debug "productId:        ${cmd.productId}"
-  log.debug "productTypeId:    ${cmd.productTypeId}"
+  if(state.debug) {
+  	log.debug "manufacturerId:   ${cmd.manufacturerId}"
+    log.debug "manufacturerName: ${cmd.manufacturerName}"
+    log.debug "productId:        ${cmd.productId}"
+    log.debug "productTypeId:    ${cmd.productTypeId}"
+  }
   def msr = String.format("%04X-%04X-%04X", cmd.manufacturerId, cmd.productTypeId, cmd.productId)
   updateDataValue("MSR", msr)
   result << createEvent(descriptionText: "$device.displayName MSR: $msr", isStateChange: false, displayed: true)
@@ -196,15 +221,21 @@ def zwaveEvent(physicalgraph.zwave.commands.sensoralarmv1.SensorAlarmReport cmd)
   sensorValueEvent(cmd.sensorState)
 }
 
-def zwaveEvent(physicalgraph.zwave.commands.notificationv3.NotificationReport cmd)
-{
+def zwaveEvent(physicalgraph.zwave.commands.notificationv3.NotificationReport cmd) {
   def result = []
-  if (cmd.notificationType == 0x05) {
+  
+  switch(cmd.notificationType) {
+  case 0x05:
     if (cmd.event == 0x00) {
-      result << createEvent(descriptionText: "$device.displayName is dry.", name: "water", value: "dry", displayed: true, isStateChange: true)
-    } else if (cmd.event == 0x02)
+      result << createEvent(descriptionText: "$device.displayName is dry.", name: "water", value: "dry", displayed: true, isStateChange: true);
+      result << createEvent(name: "probe", value: "dry", displayed: false, isStateChange: true);
+    }
+    if (cmd.event == 0x02) {
       result << createEvent(descriptionText: "$device.displayName is wet.", name: "water", value: "wet", displayed: true, isStateChange: true)
-  } else if (cmd.notificationType == 0x04) {
+      result << response(queryProbes())
+    }
+    break
+  case 0x04:
     if (cmd.event == 0x00) {
       result << createEvent(descriptionText: "$device.displayName temperature normalized", isStateChange: true)
     } else if (cmd.event <= 0x02) {
@@ -212,25 +243,23 @@ def zwaveEvent(physicalgraph.zwave.commands.notificationv3.NotificationReport cm
     } else if (cmd.event == 0x06) {
       result << createEvent(descriptionText: "$device.displayName detected low temperature", isStateChange: true)
     }
-  } else if (cmd.notificationType == 0x07) {
+    break
+  case 0x07:
     if (cmd.event == 0x00) {
-      result << createEvent(descriptionText: "$device.displayName covering was replaced", isStateChange: true)
+      result << createEvent(name: "shockSensor", value: "clear", descriptionText: "$device.displayName shock cleared", isStateChange: true)
     } else if (cmd.event == 0x03) {
-      result << createEvent(descriptionText: "$device.displayName covering was removed", isStateChange: true)
+      result << createEvent(name: "shockSensor", value: "detected", descriptionText: "$device.displayName shock detected", isStateChange: true)
+      result << response(getPosition())
+      //have to add this clear event because the sensor isn't sending a clear event.
+      //result << createEvent(name: "shockSensor", value: "clear", descriptionText: "$device.displayName shock cleared", isStateChange: true)
     }
-  } else if (cmd.notificationType) {
-    def text = "Notification $cmd.notificationType: event ${([cmd.event] + cmd.eventParameter).join(", ")}"
-    result << createEvent(name: "notification$cmd.notificationType", value: "$cmd.event", descriptionText: text, displayed: false)
-  } else {
-    def value = cmd.v1AlarmLevel == 255 ? "active" : cmd.v1AlarmLevel ?: "inactive"
-    result << createEvent(name: "alarm $cmd.v1AlarmType", value: value, displayed: false)
+    break
+  default:
+    if(state.debug) log.debug "notification event received : ${inspect(cmd)}";
+    break;
   }
-
-  def request = []
-    request << zwave.sensorMultilevelV5.sensorMultilevelGet(sensorType:1, scale:1)
-    request << zwave.batteryV1.batteryGet()
-
-  [result, response(commands(request))]
+  
+  return result;
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.wakeupv1.WakeUpNotification cmd) {
@@ -246,20 +275,18 @@ def zwaveEvent(physicalgraph.zwave.commands.wakeupv1.WakeUpNotification cmd) {
   }
 
   result << response(zwave.wakeUpV1.wakeUpNoMoreInformation())
-      return result
+  return result
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.batteryv1.BatteryReport cmd) {
-  def map = [ name: "battery", unit: "%" ]
-  if (cmd.batteryLevel == 0xFF) {
-    map.value = 1
-    map.descriptionText = "${device.displayName} has a low battery"
-    map.isStateChange = true
+  def result = []
+  if (cmd.batteryLevel == 0xFF || cmd.batteryLevel < 11 ) {
+    result << createEvent(name: "battery", unit: "%", displayed: "true", value: 1, descriptionText: "${device.displayName} has a low battery", isStateChange: true)
   } else {
-    map.value = cmd.batteryLevel
+    result << createEvent(name: "battery", unit: "%", displayed: "true", value: cmd.batteryLevel, descriptionText: "${device.displayName} battery is ${cmd.batteryLevel}", isStateChange: true)
   }
   state.lastbat = new Date().time
-  [createEvent(map), response(zwave.wakeUpV1.wakeUpNoMoreInformation())]
+  return result
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.sensormultilevelv5.SensorMultilevelReport cmd)
@@ -284,9 +311,17 @@ def zwaveEvent(physicalgraph.zwave.Command cmd) {
 
 //commands
 def getPosition() {
-      if (state.debug) log.debug "getPosition pressed \r\n"
+    if (state.debug) log.debug "getPosition pressed \r\n"
   def request = [
     zwave.configurationV1.configurationGet(parameterNumber: 0x54)
+  ]
+  commands(request)
+}
+
+def queryProbes() {
+  if (state.debug) log.debug "queryProbe pressed \r\n"
+  def request = [
+    zwave.configurationV1.configurationGet(parameterNumber: 0x88)
   ]
   commands(request)
 }
@@ -294,9 +329,22 @@ def getPosition() {
 def getTemp() {
     if (state.debug) log.debug "getTemp pressed \r\n"
   def request = [
-    zwave.sensorMultilevelV5.sensorMultilevelGet(sensorType:1),
+    zwave.sensorMultilevelV5.sensorMultilevelGet(sensorType:1)
   ]
   commands(request)
+}
+
+def getBattery() {
+  if (state.debug) log.debug "getBattery pressed \r\n"
+  def request = [
+    zwave.batteryV1.batteryGet()
+  ]
+  commands(request)
+}
+
+def clearShock() {
+  if (state.debug) log.debug "clearShock pressed \r\b"
+  sendEvent(name: "shockSensor", value: "clear", descriptionText: "$device.displayName shock cleared", isStateChange: true)
 }
 
 def configure() {
@@ -362,7 +410,7 @@ def configure() {
     zwave.configurationV1.configurationSet(parameterNumber: 0x27, scaledConfigurationValue: 20, size: 1),
 
     // Enable/disable the sensor report
-    zwave.configurationV1.configurationSet(parameterNumber: 0x30, scaledConfigurationValue: 1, size: 1),
+    zwave.configurationV1.configurationSet(parameterNumber: 0x30, scaledConfigurationValue: 55, size: 1),
 
 	// enable or disable the buzzer
 	zwave.configurationV1.configurationSet(parameterNumber: 0x56, scaledConfigurationValue: 1, size: 1),
