@@ -38,8 +38,9 @@ cc:5E,86,84,98,72,5A sec:85,59,80,70,7A,71,73,31,60,8E
         attributeState("wet", icon:"st.alarm.water.wet", backgroundColor:"#00A0DC")
       }
       tileAttribute("device.probe", key: "SECONDARY_CONTROL") {
-          attributeState("1", label: "probe 1", icon: "st.switches.switch.on", backgroundColor: "#79b821")
-	      attributeState("2", label: "probe 2", icon: "st.switches.switch.off", backgroundColor: "#ffffff")
+          attributeState("1", label: "probe 1", icon: "st.switches.switch.on")
+	      attributeState("2", label: "probe 2", icon: "st.switches.switch.on")
+          attributeState("3", label: "probe 1/2", icon: "st.switches.switch.on")
           attributeState("dry", label: "dry")
 	  }
     }
@@ -156,6 +157,8 @@ def zwaveEvent(physicalgraph.zwave.commands.configurationv2.ConfigurationReport 
         event << createEvent(name: "probe", value: "1", displayed: true, isStateChange: true, descriptionText: "${device.displayName} detected water on probe 1.");
       } else if (cmd.scaledConfigurationValue == 2) {
         event << createEvent(name: "probe", value: "2", displayed: true, isStateChange: true, descriptionText: "${device.displayName} detected water on probe 2.");
+	  } else if (cmd.scaledConfigurationValue == 3) {
+        event << createEvent(name: "probe", value: "3", displayed: true, isStateChange: true, descriptionText: "${device.displayName} detected water on both probes.");
 	  }
       break;
     default:
